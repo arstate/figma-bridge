@@ -1,207 +1,221 @@
-# figma-bridge
+# 🎨 Figma Bridge MCP (`figma-bridge`)
 
-An MCP server and Figma plugin that give your agent full read and write access to
-the Figma desktop app through the Plugin API.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Runtime: Bun](https://img.shields.io/badge/Runtime-Bun-f472b6.svg)](https://bun.sh)
+[![Platform: Linux | macOS | Windows](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-brightgreen.svg)](#)
+[![Target: Figma Desktop](https://img.shields.io/badge/Target-Figma%20Desktop-ff7262.svg)](https://figma.com)
 
-Figma's own MCP server is built for reading designs into code. figma-bridge goes
-the other way too: the agent can walk the node tree, run arbitrary Plugin API
-code, create and edit frames and text, set fills, strokes, effects, and images,
-import library components, follow and change your selection, export nodes, and
-take screenshots of the canvas to check its work.
+**Figma Bridge** adalah Model Context Protocol (MCP) Server dan Figma Plugin yang memberikan AI Agent (Google Antigravity, Claude Code, Cursor, Windsurf, Claude Desktop) akses **baca dan tulis (read & write)** dua arah penuh ke aplikasi **Figma Desktop** melalui Figma Plugin API.
 
-Everything runs on your machine. The plugin only talks to `localhost`.
+Berbeda dengan MCP bawaan Figma yang hanya membaca desain ke kode (*read-only*), **Figma Bridge** bekerja dua arah: AI Agent dapat menelusuri hierarki node (*tree*), membuat frame, mengatur Auto Layout, membuat dan mengedit teks dengan auto font-preloading, mengubah warna, stroke, dan drop shadow, mengimpor komponen, mengambil screenshot kanvas, serta menjalankan kode JavaScript arbitrer di konteks Figma Plugin API.
 
-## How it works
+Seluruh komunikasi berjalan lokal di mesin Anda (`127.0.0.1:4395`) tanpa data kanvas yang bocor ke cloud pihak ketiga.
 
-```text
-agent  --stdio-->  server/index.ts  --ws-->  relay (127.0.0.1:4395)  <--ws--  Figma plugin
-                   (one per session)         (one shared daemon)              (runs in Figma)
+---
+
+## 🚀 Quick Start untuk AI Agent (1-Click)
+
+Jika Anda ingin AI Agent Anda yang melakukan setup otomatis dari nol di mesin atau laptop baru, cukup salin instruksi di file:
+👉 **[`PROMPT_COPAS_AI_AGENT.md`](./PROMPT_COPAS_AI_AGENT.md)**
+
+Kirim prompt tersebut ke AI Agent Anda, dan agent akan otomatis menginstall dependencies, menjalankan relay, mendaftarkan config MCP, serta memandu Anda mengimpor plugin di Figma.
+
+---
+
+## 🏗️ Arsitektur Sistem
+
+```mermaid
+flowchart LR
+    A["AI Agent Client<br>(Antigravity / Claude / Cursor)"] -- "stdio (JSON-RPC)" --> B["server/index.ts<br>(MCP Server)"]
+    B -- "WebSocket localhost:4395" --> C["server/relay.ts<br>(Daemon Relay)"]
+    D["Figma Desktop App<br>(Canvas Aktif)"] -- "WebSocket localhost:4395" --> C
+    D -. "Figma Plugin API" .- E["plugin/dist/code.js<br>(Development Plugin)"]
 ```
 
-- `server/index.ts` is the MCP server your agent starts over stdio. It forwards
-  each tool call to the relay.
-- `server/relay.ts` is a small daemon on `ws://127.0.0.1:4395`. The MCP server
-  starts it on first use if it is not running. Several agent sessions can share
-  it, and it keeps running after they exit.
-- `plugin/` is the Figma plugin. It connects out to the relay, runs each call
-  against the Plugin API, and sends the result back. It reconnects on its own if
-  the relay restarts.
+- **`server/index.ts`**: MCP server berbasis stdio yang berkomunikasi dengan client LLM. Menerjemahkan setiap tool call menjadi pesan WebSocket ke relay.
+- **`server/relay.ts`**: Daemon relay ringan pada port `ws://127.0.0.1:4395`. Berjalan mandiri di latar belakang sehingga beberapa sesi AI agent dapat berbagi satu koneksi kanvas aktif tanpa `EADDRINUSE`.
+- **`plugin/`**: Figma plugin yang berjalan di Figma Desktop. Terhubung ke relay WebSocket lokal, mengeksekusi aksi kanvas via Plugin API, dan mengembalikan hasil ke agent. Plugin memiliki fitur auto-reconnect jika relay di-restart.
 
-## Requirements
+---
 
-- [Bun](https://bun.sh) 1.1 or newer. The server has no dependencies to install.
-- The Figma desktop app. Development plugins cannot be imported in the browser.
-- Edit access to the file you want the agent to work on.
+## 📋 Persyaratan
 
-## Setup
+1. **[Bun](https://bun.sh)** v1.1 atau yang lebih baru.
+2. **Aplikasi Figma Desktop** (Linux, macOS, atau Windows). *Plugin development memerlukan aplikasi Desktop; browser web Figma membatasi akses WebSocket lokal.*
+3. Hak edit (*edit access*) pada file Figma yang sedang dibuka.
 
-### 1. Get the code
+---
 
-```sh
-git clone https://github.com/Zfinix/figma-bridge.git
+## ⚡ Instalasi Cepat (Otomatis)
+
+Jalankan skrip setup interaktif:
+```bash
+git clone https://github.com/arstate/figma-bridge.git
 cd figma-bridge
+chmod +x setup.sh
+./setup.sh
 ```
 
-The built plugin is committed in `plugin/dist/`, so you do not need to build it.
+Skrip `setup.sh` akan:
+1. Memeriksa runtime Bun.
+2. Memeriksa dependensi server (`bun install`).
+3. Memverifikasi bundle plugin (`plugin/dist/code.js`).
+4. Memastikan relay daemon berjalan di background pada port `4395`.
+5. Menjalankan MCP smoke test.
+6. Menampilkan path absolut file manifest plugin untuk diimpor ke Figma.
 
-### 2. Import the plugin into Figma
+---
 
-1. Open the Figma desktop app and open any design file.
-2. Go to **Plugins > Development > Import plugin from manifest...**.
-3. Pick `plugin/manifest.json` from this repo.
+## 🔌 Setup Manual Langkah Demi Langkah
 
-You only do this once. Figma remembers the plugin under **Plugins > Development**.
+### 1. Daftarkan Plugin di Figma Desktop
+1. Buka aplikasi **Figma Desktop** dan buka file/project Anda.
+2. Klik menu utama Figma (ikon logo di kiri atas) -> **Plugins** -> **Development** -> **Import plugin from manifest...**.
+3. Navigasikan ke repositori ini dan pilih file: `plugin/manifest.json`.
+4. Jalankan plugin: Klik kanan di kanvas -> **Plugins** -> **Development** -> **figma-bridge**.
+5. Jendela plugin kecil akan muncul dan menampilkan status: `Connected to relay`.
 
-### 3. Add the MCP server to your agent
+### 2. Mulai WebSocket Relay Daemon
+```bash
+bun server/relay.ts
+```
+*(Atau biarkan server MCP menjalankannya secara otomatis pada panggilan tool pertama).*
 
-Use the absolute path to `server/index.ts` in the snippets below.
+### 3. Konfigurasi MCP Client
 
-**Claude Code**
+Tambahkan konfigurasi berikut ke MCP client pilihan Anda:
 
-```sh
-claude mcp add figma-bridge -s user -- bun /absolute/path/to/figma-bridge/server/index.ts
+#### A. Google Antigravity (`~/.gemini/antigravity/mcp_config.json`)
+```json
+{
+  "mcpServers": {
+    "figma-bridge": {
+      "command": "bun",
+      "args": ["/ABSOLUTE/PATH/TO/figma-bridge/server/index.ts"]
+    }
+  }
+}
 ```
 
-**Aster**
-
-Install it as a plugin, straight from GitHub:
-
-```sh
-aster plugins add Zfinix/figma-bridge
-```
-
-Or add it to `aster.yaml` by hand:
-
-```yaml
-mcp:
-  servers:
-    figma-bridge:
-      command: bun
-      args: ["/absolute/path/to/figma-bridge/server/index.ts"]
-```
-
-**Cursor, Claude Desktop, and other hosts that read `mcpServers` JSON**
+#### B. Claude Desktop
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "figma-bridge": {
       "command": "bun",
-      "args": ["/absolute/path/to/figma-bridge/server/index.ts"]
+      "args": ["/ABSOLUTE/PATH/TO/figma-bridge/server/index.ts"]
     }
   }
 }
 ```
 
-Cursor reads this from `~/.cursor/mcp.json`. Claude Desktop reads it from
-`~/Library/Application Support/Claude/claude_desktop_config.json`. If the host
-cannot find `bun`, use its full path from `which bun`.
-
-Restart the host after adding the server.
-
-### 4. Connect
-
-1. In Figma, open the file you want to work on.
-2. Run **Plugins > Development > figma-bridge**. A small strip appears with a
-   green dot when it is connected to the relay and the time of the last call.
-   Drag it into a corner and leave it open while the agent works. A visible
-   window also keeps Figma from showing its "Running figma-bridge" pill.
-3. Ask your agent something like "take a screenshot of the current Figma page".
-
-If the relay is not running yet, the plugin keeps retrying and connects as soon as
-the agent makes its first call, which starts the relay.
-
-### 5. Check it works
-
-Without Figma:
-
-```sh
-bun server/smoke.ts
+#### C. Cursor & Windsurf (`.cursor/mcp.json`)
+```json
+{
+  "mcpServers": {
+    "figma-bridge": {
+      "command": "bun",
+      "args": ["/ABSOLUTE/PATH/TO/figma-bridge/server/index.ts"]
+    }
+  }
+}
 ```
 
-You should see the server name and the list of tools. The last line says Figma is
-not connected, which is expected when the plugin is not running. With the plugin
-open, the same command returns `2` for `execute 1+1`.
+---
 
-## Tools
+## 🧰 Katalog 30 Tools MCP
 
-| Tool | What it does |
-| --- | --- |
-| `execute` | Run any Plugin API code. `figma` is in scope and the last expression is returned as JSON. |
-| `get_tree` | The node tree under a node (default: the document): ids, names, types, layout, text, and sizes, capped by `max_depth`. |
-| `get_node` | Full detail for one node: fills, strokes, effects, text style, constraints, transform, children. |
-| `get_layout` | A 2D ASCII map of one frame with px rulers, the columns its children share, and overflow, overlap, and near-miss alignment issues. Read it before and after moving nodes. |
-| `get_screenshot` | Render the canvas or one node to an image. This is how the agent sees its work. |
-| `notify` | Show a toast in Figma so you see what the agent did. |
-| `create_frame` | Create a frame, with optional auto layout (`layoutMode`, `itemSpacing`, padding). |
-| `create_text` | Create a text node. Fonts other than Inter Regular must be loaded first with `execute`. |
-| `set_properties` | Set any writable node properties in one call, such as `cornerRadius` or `opacity`. |
-| `set_fills` / `set_strokes` / `set_effects` | Replace a node's paints or effects. |
-| `set_image_fill` | Fill a node with an image from a URL or base64 data. |
-| `clone_node` | Duplicate a node, optionally into another parent and position. |
-| `delete_node` | Remove a node. |
-| `import_component` | Place a team library component by its key. |
-| `get_selection` | What you have selected in Figma right now. |
-| `set_selection` | Select nodes and scroll the viewport to them. |
-| `export_node` | Export a node as PNG, JPG, SVG, or PDF. |
+| Kategori | Tool Name | Deskripsi Singkat |
+| :--- | :--- | :--- |
+| **Orientasi** | `get_basic_info` | Mengambil metadata file, page aktif, daftar artboard, dan font terdeteksi. |
+| | `get_guide` | Panduan alur kerja dan praktik terbaik otomasi Figma bridge. |
+| | `get_selection` | Membaca node yang saat ini sedang dipilih user di kanvas. |
+| | `set_selection` | Memilih node tertentu di kanvas secara terprogram. |
+| **Penelusuran** | `find_nodes` | Mencari node berdasarkan nama, tipe (`FRAME`, `TEXT`, dll.), atau regex. |
+| | `get_tree` | Mengambil seluruh hierarki tree node dari root page atau frame tertentu. |
+| | `get_tree_summary`| Ringkasan tree kompak untuk menghemat token konteks AI. |
+| | `get_node` | Membaca detail lengkap properti satu node tertentu. |
+| | `get_layout` | Membaca absolute bounding box untuk kalkulasi overlap/tabrakan. |
+| | `get_computed_styles`| Mengambil style terkomputasi (CSS equivalent) dari sebuah node. |
+| **Mutasi Canvas** | `create_frame` | Membuat Frame atau Auto Layout (`HORIZONTAL` / `VERTICAL`). |
+| | `create_text` | Membuat teks baru (mendukung font preloading otomatis). |
+| | `update_text` | Memperbarui isi teks node tanpa merusak hierarki atau style. |
+| | `create_svg` | Merender vektor atau ikon baru dari string SVG. |
+| | `delete_node` | Menghapus node dari kanvas berdasarkan ID. |
+| | `clone_node` | Menggandakan node yang ada ke posisi baru. |
+| | `tidy_layout` | Merapikan susunan child node dalam Auto Layout. |
+| | `set_properties` | Mengubah dimensi, padding, itemSpacing, cornerRadius, opacity. |
+| | `set_fills` | Mengatur warna background (solid hex, linear/radial gradient). |
+| | `set_strokes` | Mengatur border, ketebalan outline, dan warna stroke. |
+| | `set_effects` | Menambahkan Drop Shadow, Inner Shadow, Layer Blur, atau Background Blur. |
+| | `set_image_fill` | Mengisi node atau frame dengan gambar dari base64 atau URL. |
+| | `get_fill_image` | Mengunduh data gambar asli dari node yang memiliki image fill. |
+| **Page & Organisasi** | `create_page` | Membuat page baru di dalam file Figma aktif. |
+| | `rename_pages` | Mengubah nama page di dalam dokumen. |
+| | `import_component`| Mengimpor komponen dari library tim yang tersedia. |
+| **Inspeksi & Visual**| `get_screenshot` | Mengambil screenshot raster PNG dari viewport atau node tertentu. |
+| | `export_node` | Mengekspor node ke format PNG, SVG, JPG, atau PDF. |
+| | `notify` | Menampilkan pesan toast notification di layar Figma Desktop user. |
+| **Arbitrary Code** | `execute` | Menjalankan kode JavaScript Plugin API arbitrer dengan return value. |
 
-## Troubleshooting
+---
 
-**"Figma is not connected"**. The plugin is not running. Open the file in the
-Figma desktop app and run **Plugins > Development > figma-bridge**.
+## 💡 Contoh Penggunaan Arbitrer via `execute`
 
-**"Relay connection lost"**. The plugin window was closed or the relay restarted.
-Run the plugin again and retry.
+AI Agent dapat langsung mengeksekusi logika Figma Plugin API native:
 
-**"Could not start the figma-bridge relay on 127.0.0.1:4395"**. Something else is
-using port 4395, or `bun` is not on the PATH the host uses. Check with
-`lsof -i :4395`, or start the relay by hand to see its log:
-
-```sh
-bun server/relay.ts
+```typescript
+// Contoh: Membuat badge dengan pill background dan border tegas
+await execute({
+  code: `
+    const frame = figma.createFrame();
+    frame.name = "Badge/Status";
+    frame.layoutMode = "HORIZONTAL";
+    frame.paddingLeft = frame.paddingRight = 16;
+    frame.paddingTop = frame.paddingBottom = 8;
+    frame.cornerRadius = 999;
+    frame.fills = [{ type: 'SOLID', color: { r: 0.95, g: 0.95, b: 0.95 } }];
+    frame.strokes = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.1 } }];
+    frame.strokeWeight = 1.5;
+    
+    await figma.loadFontAsync({ family: "Inter", style: "Bold" });
+    const text = figma.createText();
+    text.characters = "READY TO SHIP";
+    text.fontSize = 12;
+    frame.appendChild(text);
+    return frame.id;
+  `
+});
 ```
 
-**The agent is using an old version after you pulled changes**. The relay keeps
-running between sessions. Stop it and the next tool call starts a fresh one:
+Contoh skrip automasi batch tingkat lanjut untuk pembuatan poster, infografis A3, dan audit layout tersedia di folder:
+📂 **[`examples/automation/`](./examples/automation/)**
 
-```sh
-lsof -ti :4395 | xargs kill
-```
+---
 
-**The plugin connects, then drops**. Only one plugin window can hold the
-connection. Opening the plugin in a second file or tab replaces the first one.
+## 🛠️ Troubleshooting & FAQ
 
-**`create_text` fails with a font error**. Load the font first, for example with
-`execute`: `await figma.loadFontAsync({ family: "Roboto", style: "Bold" })`.
+### 1. `WebSocket connection to ws://127.0.0.1:4395 failed`
+- **Penyebab:** Relay daemon belum berjalan.
+- **Solusi:** Jalankan `./setup.sh` atau eksekusi `bun server/relay.ts` di terminal. Pastikan tidak ada firewall yang memblokir port `4395`.
 
-**The host shows no figma-bridge tools**. The host could not start `bun`. Put the
-full path to `bun` in `command` and restart the host.
+### 2. `Cannot call with documentAccess: dynamic-page`
+- **Penyebab:** File Figma sangat besar dan node berada di luar page aktif.
+- **Solusi:** Buka halaman (*page*) tempat frame desain berada di Figma Desktop, lalu jalankan kembali perintah agent.
 
-## Developing the plugin
+### 3. Font Loading Error (`The font ... has not been loaded`)
+- **Solusi:** Figma mewajibkan font di-load secara asinkron sebelum memodifikasi teks. Gunakan tool bawaan `create_text` atau `update_text` yang sudah mengotomatisasi preloading font, atau jika menggunakan tool `execute`, sertakan `await figma.loadFontAsync({ family: "NamaFont", style: "Regular" })`.
 
-The plugin source is TypeScript in `plugin/src/`. Figma runs the bundled output
-in `plugin/dist/`.
+### 4. Plugin Status: "Connecting..." tetapi tidak terhubung
+- Pastikan Anda menggunakan **Figma Desktop App**, bukan browser web Figma.
+- Buka Console Plugin via: Klik kanan jendela plugin -> **Inspect** -> Tab **Console** untuk melihat log debug.
 
-```sh
-cd plugin
-bun install
-bun run build       # bundle src/code.ts and src/ui.ts into dist/
-bun run typecheck   # tsc against @figma/plugin-typings
-```
+---
 
-After a build, close and rerun the plugin in Figma to load the new code. Run
-**Import plugin from manifest** again only if you change `manifest.json`.
+## 📄 Lisensi
 
-To test the server without Figma, run `bun server/fake-plugin.ts` in one terminal.
-It connects to the relay as a stand-in plugin.
-
-## Security
-
-`execute` runs whatever Plugin API code the agent sends, with the same access to
-the open file that you have. The relay listens on `127.0.0.1` only, and the
-plugin's manifest allows network access to `localhost:4395` and nothing else.
-Close the plugin window to cut the agent off.
-
-## License
-
-MIT
+Didistribusikan di bawah lisensi **MIT**. Silakan gunakan, modifikasi, dan integrasikan dengan AI workflow Anda secara bebas.

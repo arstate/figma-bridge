@@ -167,9 +167,101 @@ export const importComponent = method(
   },
 );
 
-export const getSelection = method(z.object({}), () => ({
-  nodes: figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type })),
-}));
+function serializeSelectedNode(n: SceneNode): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    id: n.id,
+    name: n.name,
+    type: n.type,
+    visible: n.visible,
+    locked: n.locked,
+    x: Math.round(n.x),
+    y: Math.round(n.y),
+    width: Math.round(n.width),
+    height: Math.round(n.height),
+    rotation: Math.round(n.rotation || 0),
+  };
+
+  if (n.parent) {
+    base.parentId = n.parent.id;
+    base.parentName = n.parent.name;
+    base.parentType = n.parent.type;
+  }
+
+  let curr: BaseNode | null = n;
+  const ancestors: Array<{ id: string; name: string; type: string }> = [];
+  while (curr && curr.parent && curr.parent.type !== "DOCUMENT") {
+    ancestors.unshift({ id: curr.parent.id, name: curr.parent.name, type: curr.parent.type });
+    if (curr.parent.type === "PAGE") {
+      base.topLevelFrame = { id: curr.id, name: curr.name, type: curr.type };
+      break;
+    }
+    curr = curr.parent;
+  }
+  base.ancestorPath = ancestors.map((a) => a.name).join(" > ");
+
+  if (n.type === "TEXT") {
+    base.characters = n.characters;
+    base.fontSize = typeof n.fontSize === "number" ? n.fontSize : "mixed";
+    base.fontName = n.fontName;
+    base.textAlignHorizontal = n.textAlignHorizontal;
+    base.textAlignVertical = n.textAlignVertical;
+    base.textAutoResize = n.textAutoResize;
+  }
+
+  if ("layoutMode" in n) {
+    base.layoutMode = n.layoutMode;
+    base.primaryAxisAlignItems = n.primaryAxisAlignItems;
+    base.counterAxisAlignItems = n.counterAxisAlignItems;
+    base.itemSpacing = n.itemSpacing;
+    base.paddingLeft = n.paddingLeft;
+    base.paddingRight = n.paddingRight;
+    base.paddingTop = n.paddingTop;
+    base.paddingBottom = n.paddingBottom;
+  }
+
+  if ("cornerRadius" in n && typeof n.cornerRadius === "number") {
+    base.cornerRadius = n.cornerRadius;
+  }
+
+  if ("fills" in n && Array.isArray(n.fills)) {
+    base.fills = n.fills;
+  }
+  if ("strokes" in n && Array.isArray(n.strokes)) {
+    base.strokes = n.strokes;
+    base.strokeWeight = n.strokeWeight;
+  }
+  if ("effects" in n && Array.isArray(n.effects)) {
+    base.effects = n.effects;
+  }
+  if ("opacity" in n && typeof n.opacity === "number") {
+    base.opacity = n.opacity;
+  }
+
+  if ("children" in n && Array.isArray(n.children)) {
+    base.childrenCount = n.children.length;
+    base.children = n.children.map((c) => ({
+      id: c.id,
+      name: c.name,
+      type: c.type,
+      x: Math.round(c.x),
+      y: Math.round(c.y),
+      width: Math.round(c.width),
+      height: Math.round(c.height),
+      characters: c.type === "TEXT" ? c.characters : undefined,
+    }));
+  }
+
+  return base;
+}
+
+export const getSelection = method(z.object({}), () => {
+  const selection = figma.currentPage.selection;
+  return {
+    count: selection.length,
+    page: figma.currentPage.name,
+    nodes: selection.map((n) => serializeSelectedNode(n)),
+  };
+});
 
 export const setSelection = method(
   z.object({ nodeIds: z.array(z.string()) }),

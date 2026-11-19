@@ -281,15 +281,20 @@ export const getScreenshot = defineTool({
 
 export const getSelection = defineTool({
   description:
-    "What the human has selected in Figma right now. The plugin pushes selection changes continuously, so this is usually instant from cache.",
+    "What the human has selected in Figma right now with deep inspection: id, name, type, geometry (x, y, w, h, rotation), text content, styles (fills, strokes, effects), parent context, ancestor hierarchy path, and top-level artboard frame. Use this tool FIRST before any revision to identify the exact element the user has selected and perform surgical in-place edits without modifying unrelated elements.",
   schema: z.object({}),
   annotations: { readOnlyHint: true },
-  run: () => {
-    const cached = selectionCache();
-    if (cached && Date.now() - cached.at < SELECTION_CACHE_MS) {
-      return Promise.resolve(text(JSON.stringify({ nodes: cached.nodes, source: "push" }, null, 2)));
+  run: async () => {
+    try {
+      const res = await callPlugin("get_selection", {});
+      return json(res);
+    } catch {
+      const cached = selectionCache();
+      if (cached && Date.now() - cached.at < SELECTION_CACHE_MS) {
+        return text(JSON.stringify({ nodes: cached.nodes, source: "push" }, null, 2));
+      }
+      return json({ count: 0, nodes: [], error: "No selection or plugin offline" });
     }
-    return callPlugin("get_selection", {}).then(json);
   },
 });
 

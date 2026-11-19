@@ -4,7 +4,9 @@
  * Run with: bun server/smoke.ts
  */
 
-const proc = Bun.spawn(["bun", new URL("./index.ts", import.meta.url).pathname], {
+import { fileURLToPath } from "node:url";
+
+const proc = Bun.spawn(["bun", fileURLToPath(new URL("./index.ts", import.meta.url))], {
   stdin: "pipe",
   stdout: "pipe",
   stderr: "inherit",

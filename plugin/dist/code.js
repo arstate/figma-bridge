@@ -331,6 +331,9 @@
   }
   var B64_CHUNK = 32768;
   function bytesToBase64(buffer) {
+    if (typeof figma.base64Encode === "function") {
+      return figma.base64Encode(buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer));
+    }
     const bytes = new Uint8Array(buffer);
     const binary = t3(Array.from(bytes), B64_CHUNK).map((chunk) => String.fromCharCode(...chunk)).join("");
     return btoa(binary);
@@ -839,9 +842,92 @@
     xy(pos, instance);
     return { id: instance.id, name: instance.name, componentKey };
   });
-  var getSelection = method(z.object({}), () => ({
-    nodes: figma.currentPage.selection.map((n8) => ({ id: n8.id, name: n8.name, type: n8.type }))
-  }));
+  function serializeSelectedNode(n8) {
+    const base = {
+      id: n8.id,
+      name: n8.name,
+      type: n8.type,
+      visible: n8.visible,
+      locked: n8.locked,
+      x: Math.round(n8.x),
+      y: Math.round(n8.y),
+      width: Math.round(n8.width),
+      height: Math.round(n8.height),
+      rotation: Math.round(n8.rotation || 0)
+    };
+    if (n8.parent) {
+      base.parentId = n8.parent.id;
+      base.parentName = n8.parent.name;
+      base.parentType = n8.parent.type;
+    }
+    let curr = n8;
+    const ancestors = [];
+    while (curr && curr.parent && curr.parent.type !== "DOCUMENT") {
+      ancestors.unshift({ id: curr.parent.id, name: curr.parent.name, type: curr.parent.type });
+      if (curr.parent.type === "PAGE") {
+        base.topLevelFrame = { id: curr.id, name: curr.name, type: curr.type };
+        break;
+      }
+      curr = curr.parent;
+    }
+    base.ancestorPath = ancestors.map((a3) => a3.name).join(" > ");
+    if (n8.type === "TEXT") {
+      base.characters = n8.characters;
+      base.fontSize = typeof n8.fontSize === "number" ? n8.fontSize : "mixed";
+      base.fontName = n8.fontName;
+      base.textAlignHorizontal = n8.textAlignHorizontal;
+      base.textAlignVertical = n8.textAlignVertical;
+      base.textAutoResize = n8.textAutoResize;
+    }
+    if ("layoutMode" in n8) {
+      base.layoutMode = n8.layoutMode;
+      base.primaryAxisAlignItems = n8.primaryAxisAlignItems;
+      base.counterAxisAlignItems = n8.counterAxisAlignItems;
+      base.itemSpacing = n8.itemSpacing;
+      base.paddingLeft = n8.paddingLeft;
+      base.paddingRight = n8.paddingRight;
+      base.paddingTop = n8.paddingTop;
+      base.paddingBottom = n8.paddingBottom;
+    }
+    if ("cornerRadius" in n8 && typeof n8.cornerRadius === "number") {
+      base.cornerRadius = n8.cornerRadius;
+    }
+    if ("fills" in n8 && Array.isArray(n8.fills)) {
+      base.fills = n8.fills;
+    }
+    if ("strokes" in n8 && Array.isArray(n8.strokes)) {
+      base.strokes = n8.strokes;
+      base.strokeWeight = n8.strokeWeight;
+    }
+    if ("effects" in n8 && Array.isArray(n8.effects)) {
+      base.effects = n8.effects;
+    }
+    if ("opacity" in n8 && typeof n8.opacity === "number") {
+      base.opacity = n8.opacity;
+    }
+    if ("children" in n8 && Array.isArray(n8.children)) {
+      base.childrenCount = n8.children.length;
+      base.children = n8.children.map((c) => ({
+        id: c.id,
+        name: c.name,
+        type: c.type,
+        x: Math.round(c.x),
+        y: Math.round(c.y),
+        width: Math.round(c.width),
+        height: Math.round(c.height),
+        characters: c.type === "TEXT" ? c.characters : undefined
+      }));
+    }
+    return base;
+  }
+  var getSelection = method(z.object({}), () => {
+    const selection = figma.currentPage.selection;
+    return {
+      count: selection.length,
+      page: figma.currentPage.name,
+      nodes: selection.map((n8) => serializeSelectedNode(n8))
+    };
+  });
   var setSelection = method(z.object({ nodeIds: z.array(z.string()) }), async ({ nodeIds }) => {
     const nodes = [];
     for (const id of nodeIds)
@@ -945,11 +1031,24 @@ ${code}
   // src/code.ts
   figma.showUI(__html__, { width: 240, height: 120, themeColors: true });
   figma.on("selectionchange", () => {
+    const selection = figma.currentPage.selection;
     figma.ui.postMessage({
       source: "figma-bridge",
       type: "event",
       name: "selectionchange",
-      nodes: figma.currentPage.selection.map((n8) => n8.id)
+      count: selection.length,
+      nodes: selection.map((n8) => ({
+        id: n8.id,
+        name: n8.name,
+        type: n8.type,
+        x: Math.round(n8.x),
+        y: Math.round(n8.y),
+        width: Math.round(n8.width),
+        height: Math.round(n8.height),
+        parentId: n8.parent ? n8.parent.id : null,
+        parentName: n8.parent ? n8.parent.name : null,
+        characters: n8.type === "TEXT" ? n8.characters : undefined
+      }))
     });
   });
   figma.ui.onmessage = (msg) => {

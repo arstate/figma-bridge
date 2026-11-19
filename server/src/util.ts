@@ -3,8 +3,8 @@
  */
 
 export const SELECTION_CACHE_MS = 30_000;
-export const CALL_TIMEOUT_MS = 30_000;
-export const MAX_RESULT_CHARS = 400_000;
+export const CALL_TIMEOUT_MS = 120_000;
+export const MAX_RESULT_CHARS = 2_000_000;
 
 /** Figma RGB (0..1 floats) to "#rrggbb". */
 export function hexOf(c: { r: number; g: number; b: number }): string {

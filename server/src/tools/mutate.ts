@@ -3,6 +3,7 @@
  */
 
 import { z } from "zod";
+import * as fs from "node:fs/promises";
 import { callPlugin } from "../relay-client";
 import { defineTool, json, text } from "./registry";
 
@@ -215,10 +216,267 @@ export const setSelection = defineTool({
     callPlugin("set_selection", { nodeIds: args.node_ids }).then(json),
 });
 
+export const createSvg = defineTool({
+  description:
+    "Create/import vector nodes directly from an SVG string or local SVG file path. Scales proportionally if width/height is passed.",
+  schema: z.object({
+    svg_content: z.string().optional().describe("Raw SVG XML text"),
+    svg_path: z.string().optional().describe("Absolute file path to an SVG file on disk"),
+    parent_id: z.string().optional().describe("Target frame or page ID"),
+    name: z.string().optional().describe("Node name in layer list"),
+    x: z.number().optional().describe("X position"),
+    y: z.number().optional().describe("Y position"),
+    width: z.number().optional().describe("Target width (proportional scale)"),
+    height: z.number().optional().describe("Target height (proportional scale)"),
+    color: z.string().optional().describe("Optional hex tint color (e.g. #012969) applied to vector fills"),
+  }),
+  run: async (args) => {
+    let svg = args.svg_content;
+    if (!svg && args.svg_path) {
+      svg = await fs.readFile(args.svg_path, "utf-8");
+    }
+    if (!svg) throw new Error("pass svg_content or svg_path");
+
+    const code = `
+      const svg = ${JSON.stringify(svg)};
+      const node = figma.createNodeFromSvg(svg);
+      if (${JSON.stringify(args.name)}) node.name = ${JSON.stringify(args.name)};
+      
+      const parentId = ${JSON.stringify(args.parent_id)};
+      if (parentId) {
+        const parent = await figma.getNodeByIdAsync(parentId);
+        if (parent && "appendChild" in parent) {
+          parent.appendChild(node);
+        }
+      } else {
+        figma.currentPage.appendChild(node);
+      }
+
+      if (${args.x !== undefined}) node.x = ${args.x ?? 0};
+      if (${args.y !== undefined}) node.y = ${args.y ?? 0};
+
+      const targetW = ${args.width ?? "null"};
+      const targetH = ${args.height ?? "null"};
+      if (node.width > 0 && node.height > 0) {
+        if (targetW && targetH) {
+          const scale = Math.min(targetW / node.width, targetH / node.height);
+          node.rescale(scale);
+        } else if (targetW) {
+          node.rescale(targetW / node.width);
+        } else if (targetH) {
+          node.rescale(targetH / node.height);
+        }
+      }
+
+      const hexColor = ${JSON.stringify(args.color ?? null)};
+      if (hexColor) {
+        const clean = hexColor.replace("#", "");
+        const rgb = {
+          r: parseInt(clean.substring(0, 2), 16) / 255,
+          g: parseInt(clean.substring(2, 4), 16) / 255,
+          b: parseInt(clean.substring(4, 6), 16) / 255
+        };
+        const applyColor = (n) => {
+          if ("fills" in n && Array.isArray(n.fills) && n.fills.length > 0) {
+            n.fills = [{ type: "SOLID", color: rgb }];
+          }
+          if ("children" in n && Array.isArray(n.children)) {
+            for (const c of n.children) applyColor(c);
+          }
+        };
+        applyColor(node);
+      }
+
+      return {
+        id: node.id,
+        name: node.name,
+        type: node.type,
+        x: Math.round(node.x),
+        y: Math.round(node.y),
+        width: Math.round(node.width),
+        height: Math.round(node.height),
+        childrenCount: node.children ? node.children.length : 0
+      };
+    `;
+
+    return callPlugin("execute", { code }).then(json);
+  },
+});
+
+export const updateText = defineTool({
+  description:
+    "Safely update characters and styling of an existing text node with automatic multi-font preloading to prevent font errors.",
+  schema: z.object({
+    node_id: z.string().describe("Text node ID to update"),
+    characters: z.string().describe("New text content"),
+    font_size: z.number().optional().describe("Optional new font size in px"),
+    font_name: z.object({ family: z.string(), style: z.string() }).optional(),
+    color: z.string().optional().describe("Optional new hex fill color (e.g. #012969)"),
+    fills: z.array(paint).optional().describe("Optional new fill colors"),
+  }),
+  run: async (args) => {
+    const code = `
+      const node = await figma.getNodeByIdAsync(${JSON.stringify(args.node_id)});
+      if (!node) throw new Error("Node not found: " + ${JSON.stringify(args.node_id)});
+      if (node.type !== "TEXT") throw new Error("Node is not a TEXT node: " + node.type);
+
+      // 1. Fast deduplicated font preloading
+      const loadedFonts = new Set();
+      const loadFontSafe = async (fn) => {
+        if (!fn || fn === figma.mixed) return;
+        const key = fn.family + "::" + fn.style;
+        if (!loadedFonts.has(key)) {
+          loadedFonts.add(key);
+          await figma.loadFontAsync(fn);
+        }
+      };
+
+      if (node.fontName !== figma.mixed) {
+        await loadFontSafe(node.fontName);
+      } else {
+        if (typeof node.getStyledTextSegments === "function") {
+          const segments = node.getStyledTextSegments(["fontName"]);
+          for (const s of segments) {
+            await loadFontSafe(s.fontName);
+          }
+          if (segments.length > 0 && segments[0].fontName && segments[0].fontName !== figma.mixed) {
+            node.fontName = segments[0].fontName;
+          }
+        } else {
+          const len = node.characters.length;
+          for (let i = 0; i < len; i++) {
+            const fn = node.getRangeFontName(i, i + 1);
+            await loadFontSafe(fn);
+          }
+          if (len > 0) {
+            const firstFn = node.getRangeFontName(0, 1);
+            if (firstFn !== figma.mixed) node.fontName = firstFn;
+          }
+        }
+      }
+
+      // 2. Preload target font if specified
+      const targetFont = ${JSON.stringify(args.font_name)};
+      if (targetFont) {
+        await figma.loadFontAsync(targetFont);
+        node.fontName = targetFont;
+      }
+
+      // 3. Update characters
+      node.characters = ${JSON.stringify(args.characters)};
+
+      // 4. Update optional properties
+      const targetSize = ${args.font_size ?? "null"};
+      if (targetSize !== null) node.fontSize = targetSize;
+
+      const hexColor = ${JSON.stringify(args.color ?? null)};
+      if (hexColor) {
+        const clean = hexColor.replace("#", "");
+        node.fills = [{
+          type: "SOLID",
+          color: {
+            r: parseInt(clean.substring(0, 2), 16) / 255,
+            g: parseInt(clean.substring(2, 4), 16) / 255,
+            b: parseInt(clean.substring(4, 6), 16) / 255
+          }
+        }];
+      } else {
+        const targetFills = ${JSON.stringify(args.fills)};
+        if (targetFills) node.fills = targetFills;
+      }
+
+      return {
+        id: node.id,
+        name: node.name,
+        characters: node.characters,
+        fontSize: node.fontSize,
+        fontName: node.fontName,
+        width: Math.round(node.width),
+        height: Math.round(node.height)
+      };
+    `;
+
+    return callPlugin("execute", { code }).then(json);
+  },
+});
+
+export const tidyLayout = defineTool({
+  description:
+    "Tidy and align a frame: snap coordinates/dimensions to whole integer pixels (eliminating subpixel jitter) or apply clean Auto Layout with uniform spacing and padding.",
+  schema: z.object({
+    node_id: z.string().describe("Frame node ID to tidy"),
+    mode: z.enum(["PIXEL_GRID", "AUTO_LAYOUT"]).default("PIXEL_GRID"),
+    layout_mode: z.enum(["HORIZONTAL", "VERTICAL"]).optional(),
+    item_spacing: z.number().optional(),
+    padding: z.number().optional(),
+    corner_radius: z.number().optional(),
+    align_items: z.enum(["MIN", "CENTER", "MAX", "SPACE_BETWEEN"]).optional(),
+    counter_align_items: z.enum(["MIN", "CENTER", "MAX"]).optional(),
+  }),
+  run: async (args) => {
+    const code = `
+      const node = await figma.getNodeByIdAsync(${JSON.stringify(args.node_id)});
+      if (!node) throw new Error("Node not found: " + ${JSON.stringify(args.node_id)});
+      if (!("children" in node)) throw new Error("Node has no children to tidy");
+
+      let count = 0;
+      if (${JSON.stringify(args.mode)} === "PIXEL_GRID") {
+        try {
+          node.x = Math.round(node.x);
+          node.y = Math.round(node.y);
+          if ("resize" in node) node.resize(Math.round(node.width), Math.round(node.height));
+        } catch {}
+        for (const child of node.children) {
+          try {
+            child.x = Math.round(child.x);
+            child.y = Math.round(child.y);
+            if ("resize" in child) {
+              child.resize(Math.round(child.width), Math.round(child.height));
+            }
+          } catch {}
+          count++;
+        }
+      } else if (${JSON.stringify(args.mode)} === "AUTO_LAYOUT" && "layoutMode" in node) {
+        const rawLm = ${JSON.stringify(args.layout_mode ?? "VERTICAL")};
+        const lm = (rawLm === "HORIZONTAL" || rawLm === "VERTICAL") ? rawLm : "VERTICAL";
+        node.layoutMode = lm;
+        if (${args.item_spacing !== undefined}) node.itemSpacing = ${args.item_spacing ?? 16};
+        if (${args.padding !== undefined}) {
+          const p = ${args.padding ?? 24};
+          node.paddingLeft = p;
+          node.paddingRight = p;
+          node.paddingTop = p;
+          node.paddingBottom = p;
+        }
+        if (${args.corner_radius !== undefined}) node.cornerRadius = ${args.corner_radius ?? 16};
+        const align = ${JSON.stringify(args.align_items ?? null)};
+        if (align && "primaryAxisAlignItems" in node) node.primaryAxisAlignItems = align;
+        const cAlign = ${JSON.stringify(args.counter_align_items ?? null)};
+        if (cAlign && "counterAxisAlignItems" in node) node.counterAxisAlignItems = cAlign;
+        count = node.children.length;
+      }
+
+      return {
+        id: node.id,
+        name: node.name,
+        mode: ${JSON.stringify(args.mode)},
+        childrenCount: count,
+        width: Math.round(node.width),
+        height: Math.round(node.height)
+      };
+    `;
+
+    return callPlugin("execute", { code }).then(json);
+  },
+});
+
 export const mutateTools = {
   notify,
   create_frame: createFrame,
   create_text: createText,
+  create_svg: createSvg,
+  update_text: updateText,
+  tidy_layout: tidyLayout,
   set_properties: setProperties,
   delete_node: deleteNode,
   clone_node: cloneNode,

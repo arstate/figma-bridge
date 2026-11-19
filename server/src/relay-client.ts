@@ -5,6 +5,7 @@
  * share one plugin connection without port conflicts.
  */
 
+import { fileURLToPath } from "node:url";
 import { log } from "./logger";
 import { CALL_TIMEOUT_MS } from "./util";
 
@@ -26,7 +27,7 @@ export function selectionCache() {
 }
 
 function spawnRelay() {
-  const script = new URL("../relay.ts", import.meta.url).pathname;
+  const script = fileURLToPath(new URL("../relay.ts", import.meta.url));
   try {
     const proc = Bun.spawn(["bun", script], {
       stdin: "ignore",
@@ -135,6 +136,15 @@ function rejectAllPending(err: Error) {
     p.reject(err);
   }
   pending.clear();
+}
+
+export function disconnectRelay() {
+  if (relay) {
+    try {
+      relay.close();
+    } catch {}
+    relay = null;
+  }
 }
 
 /** Run arbitrary Plugin API code inside Figma; resolves with the last expression's value. */

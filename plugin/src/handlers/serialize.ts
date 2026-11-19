@@ -27,6 +27,9 @@ export function serialize(value: unknown, depth = 0): unknown {
 const B64_CHUNK = 0x8000;
 
 export function bytesToBase64(buffer: ArrayBuffer | Uint8Array): string {
+  if (typeof (figma as any).base64Encode === "function") {
+    return (figma as any).base64Encode(buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer));
+  }
   const bytes = new Uint8Array(buffer);
   const binary = R.chunk(Array.from(bytes), B64_CHUNK)
     .map((chunk) => String.fromCharCode(...chunk))

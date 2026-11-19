@@ -113,8 +113,8 @@ Bun.serve({
       const id = nextCallId++;
       const timer = setTimeout(() => {
         pending.delete(id);
-        send(ws, { cid: msg.cid, ok: false, error: `Figma call ${msg.method} timed out after 30s` });
-      }, 30_000);
+        send(ws, { cid: msg.cid, ok: false, error: `Figma call ${msg.method} timed out after 120s` });
+      }, 120_000);
       pending.set(id, {
         resolve: (result) => send(ws, { cid: msg.cid, ok: true, result }),
         reject: (err) => send(ws, { cid: msg.cid, ok: false, error: err.message }),
